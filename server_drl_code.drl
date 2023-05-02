@@ -1,0 +1,119 @@
+# -------------------------------------------------------------------------
+# BSD 3-Clause License
+# Copyright (c) 2023 Doosan Robotics
+# All rights reserved.
+# -------------------------------------------------------------------------
+# Title: Robotiq gripper test DRL code using socket communication.
+# Date: Apr, 20, 2023
+# -------------------------------------------------------------------------
+# Note, Test after executing initialize() in the state where there is no object.
+
+# Turn off report lines in DRL to speed up code execution.
+# drl_report_line(OFF)
+
+# Define the function.
+# Initialize the position of the gripper.
+def initialize():
+    set_modbus_output_multi("robotiq1", [0,0,0])
+    wait(0.1)
+    set_modbus_output_multi("robotiq1", [0x0100,0,0])
+    wait(5)
+
+# This function operates the gripping motion.
+def act_gripper(position, velocity, force, wait_time):
+    velforce = (velocity << 8) + force
+    act_result = set_modbus_output_multi("robotiq1", [action_cmd,position,velforce])
+    wait(wait_time)
+    
+# This is the thread that senses the data of the gripper.
+def sense_gripper():
+    current_time = time.time()
+
+    while True:
+        # Receive multi-input of robotiq through modbus.
+        state = get_modbus_input_multi("robotiq_sts")
+        
+        #state[x] is two bytes and sequence is BYTE0 BYTE1~
+        sts_gACT = (state[0] & 0x0100) >> 8     # BYTE0/BIT0
+        sts_gGTO = (state[0] & 0x0800) >> 11    # BYTE0/BIT3
+        sts_gSTA = (state[0] & 0x3000) >> 12    # BYTE0/BIT4~5
+        sts_gOBJ = (state[0] & 0xC000) >> 14    # BYTE0/BIT6~7
+        sts_gFLT = (state[1] & 0x0F00) >> 8     # BYTE2/BIT0~3
+        sts_gPR = (state[1] & 0x00FF)           # BYTE3/BIT0~7
+        sts_gPO = (state[2] & 0xFF00) >> 8      # BYTE4/BIT0~7
+        sts_gCU = (state[2] & 0x00FF)           # BYTE5/BIT0~7
+               
+        # Get the elapsed time since the current time
+        elapsed_time = time.time() - current_time
+        
+        # Convert elapsed time to minutes, seconds, and milliseconds
+        minutes, seconds = divmod(elapsed_time, 60)
+        seconds, milliseconds = divmod(seconds, 1)
+        milliseconds = int(milliseconds * 1000)
+        
+        # Define time format
+        time_line = "%02d:%02d.%03d" % (minutes, seconds, milliseconds)
+
+        # setting gripper state
+        # 0 : open 1: motion 2: hold
+        gripper_state = 0 
+        if sts_gOBJ == 3:
+            gripper_state = 0
+        elif sts_gOBJ == 2:
+            gripper_state = 2
+        elif sts_gOBJ == 0:
+            gripper_state = 1
+            
+        # Sends data to the client (b represents the byte type).
+        line = time_line +", "+str(gripper_state)+", "+str(sts_gCU*10)+"\n"
+        server_socket_write(sock, line.encode())
+
+        # 1ms wait
+        python_sleep(0.001)
+
+# Import the python library.
+import time
+import datetime
+
+# Opens the port 20002 and waits until the client connects in DRL.
+# The connected socket is returned if the connection is successful.
+# Wait until the client is running.
+sock = server_socket_open(20002)
+
+# Set user-defined parameters
+test_period = 30    # gripping test time
+pos         = 200   # close position of the gripper fingers (0~255)
+force       = 10     # force of the gripper fingers (Low Force mode(set 0), Secure Grip(set 1~255))
+vel         = 25    # velocity of gripping motion (0~255)
+
+# Setting the address and command action for robotiq
+address_cmd = 1000
+address_sts = 2000
+action_cmd = 0x0900
+
+# Note, Execute after deleting if the same modbus variable is already defined.
+# Define Modbus variables for Robotiq communication.
+add_modbus_rtu_signal_multi(slaveid=9, port="/dev/ttyUSB0", baudrate=115200, bytesize=DR_EIGHTBITS, parity=DR_PARITY_NONE, stopbits=DR_STOPBITS_ONE, name="robotiq1", reg_type=DR_HOLDING_REGISTER, start_address=address_cmd, cnt=3)
+add_modbus_rtu_signal_multi(slaveid=9, port="/dev/ttyUSB0", baudrate=115200, bytesize=DR_EIGHTBITS, parity=DR_PARITY_NONE, stopbits=DR_STOPBITS_ONE, name="robotiq_sts", reg_type=DR_HOLDING_REGISTER, start_address=address_sts, cnt=3)
+
+# Initialize the robotiq gripper.
+initialize()
+
+# Start a thread that gets the status of the robotiq gripper.
+sensing_thread = thread_run(sense_gripper, loop=False)
+
+# Gripping motion starts
+start_time = time.time()
+end_time = start_time + test_period
+
+# Running open/close motion
+while time.time() < end_time:
+    act_gripper(pos, vel, force, 3) # close motion
+    act_gripper(0,   vel, force, 3) # open motion
+
+# Delete robotiq variables related to Modbus.
+del_modbus_signal_multi("robotiq1")
+del_modbus_signal_multi("robotiq_sts")
+
+# Closes the connection to the client.
+server_socket_close(sock)
