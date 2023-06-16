@@ -1,15 +1,24 @@
 # -------------------------------------------------------------------------
-# BSD 3-Clause License
 # Copyright (c) 2023 Doosan Robotics
 # All rights reserved.
 # -------------------------------------------------------------------------
 # Title: Robotiq gripper test DRL code using socket communication.
 # Date: Apr, 20, 2023
+# Updated: Jun, 16, 2023
+# Name: Seonghyeon Jo
+# Email: seonghyeon2.jo@doosan.com
 # -------------------------------------------------------------------------
-# Note, Test after executing initialize() in the state where there is no object.
-
+# Note, 
+# Test after executing initialize() in the state where there is no object.
+# If you want another gripper data,
+# change the file header in .py and the global variable name in .drl.
+# -------------------------------------------------------------------------
 # Turn off report lines in DRL to speed up code execution.
 # drl_report_line(OFF)
+
+# Declare a global global variable.
+gTimeStorageFormatMode = 1 # 0 : mm:sec:ms, 1 : only millisecond
+gVariableNames = ["gOBJ", "gPR", "gPO", "gCU"]
 
 # Define the function.
 # Initialize the position of the gripper.
@@ -27,45 +36,54 @@ def act_gripper(position, velocity, force, wait_time):
     
 # This is the thread that senses the data of the gripper.
 def sense_gripper():
-    current_time = time.time()
+    start_time = time.time()
+    registerDic = {}
+    registerDic.update({"gOBJ": {}, "gSTA": {}, "gGTO": {}, "gACT": {},
+                        "kFLT": {}, "gFLT": {}, "gPR": {}, "gPO": {}, "gCU": {}})
+    
+    for variable_name in gVariableNames:
+        if variable_name in registerDic:
+        else:
+            print("Dictionary", variable_name, "not found in registerDic")
+            exit()
 
     while True:
         # Receive multi-input of robotiq through modbus.
         state = get_modbus_input_multi("robotiq_sts")
         
         #state[x] is two bytes and sequence is BYTE0 BYTE1~
-        sts_gACT = (state[0] & 0x0100) >> 8     # BYTE0/BIT0
-        sts_gGTO = (state[0] & 0x0800) >> 11    # BYTE0/BIT3
-        sts_gSTA = (state[0] & 0x3000) >> 12    # BYTE0/BIT4~5
-        sts_gOBJ = (state[0] & 0xC000) >> 14    # BYTE0/BIT6~7
-        sts_gFLT = (state[1] & 0x0F00) >> 8     # BYTE2/BIT0~3
-        sts_gPR = (state[1] & 0x00FF)           # BYTE3/BIT0~7
-        sts_gPO = (state[2] & 0xFF00) >> 8      # BYTE4/BIT0~7
-        sts_gCU = (state[2] & 0x00FF)           # BYTE5/BIT0~7
-               
-        # Get the elapsed time since the current time
-        elapsed_time = time.time() - current_time
+        registerDic["gACT"] = (state[0] & 0x0100) >> 8     # BYTE0/BIT0
+        registerDic["gGTO"] = (state[0] & 0x0800) >> 11    # BYTE0/BIT3
+        registerDic["gSTA"] = (state[0] & 0x3000) >> 12    # BYTE0/BIT4~5
+        registerDic["gOBJ"] = (state[0] & 0xC000) >> 14    # BYTE0/BIT6~7
+        registerDic["gFLT"] = (state[1] & 0x0F00) >> 8     # BYTE2/BIT0~3
+        registerDic["gPR"] = (state[1] & 0x00FF)           # BYTE3/BIT0~7
+        registerDic["gPO"] = (state[2] & 0xFF00) >> 8      # BYTE4/BIT0~7
+        registerDic["gCU"] = (state[2] & 0x00FF)           # BYTE5/BIT0~7
         
-        # Convert elapsed time to minutes, seconds, and milliseconds
-        minutes, seconds = divmod(elapsed_time, 60)
-        seconds, milliseconds = divmod(seconds, 1)
-        milliseconds = int(milliseconds * 1000)
-        
-        # Define time format
-        time_line = "%02d:%02d.%03d" % (minutes, seconds, milliseconds)
-
-        # setting gripper state
-        # 0 : open 1: motion 2: hold
-        gripper_state = 0 
-        if sts_gOBJ == 3:
-            gripper_state = 0
-        elif sts_gOBJ == 2:
-            gripper_state = 2
-        elif sts_gOBJ == 0:
-            gripper_state = 1
+        if (gTimeStorageFormatMode == 0):
+            # Get the elapsed time since the current time
+            elapsed_time = time.time() - start_time
+    
+            # Convert elapsed time to minutes, seconds, and milliseconds
+            minutes, seconds = divmod(elapsed_time, 60)
+            seconds, milliseconds = divmod(seconds, 1)
+            milliseconds = int(milliseconds * 1000)
             
+            # Define time format
+            time_line = "%02d:%02d.%03d" % (minutes, seconds, milliseconds)
+        else :
+            # Only mill
+            ms_time = round(time.time()*1000.0- start_time*1000.0)
+            
+             # Define time format
+            time_line = str(ms_time)
+
         # Sends data to the client (b represents the byte type).
-        line = time_line +", "+str(gripper_state)+", "+str(sts_gCU*10)+"\n"
+        line = time_line
+        for variable_name in gVariableNames:
+            line = line + ", "+ str(registerDic[variable_name])
+        line = line +"\n"
         server_socket_write(sock, line.encode())
 
         # 1ms wait
@@ -83,8 +101,8 @@ sock = server_socket_open(20002)
 # Set user-defined parameters
 test_period = 30    # gripping test time
 pos         = 200   # close position of the gripper fingers (0~255)
-force       = 10     # force of the gripper fingers (Low Force mode(set 0), Secure Grip(set 1~255))
-vel         = 25    # velocity of gripping motion (0~255)
+force       = 10    # force of the gripper fingers (Low Force mode(set 0), Secure Grip(set 1~255))
+vel         = 25     # velocity of gripping motion (0~255)
 
 # Setting the address and command action for robotiq
 address_cmd = 1000
